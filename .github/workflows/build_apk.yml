@@ -98,6 +98,32 @@ jobs:
       # периодически отдаёт 504. Качаем дистрибутив Gradle 8.0.2 с зеркала
       # прямо в кэш gradle-wrapper: имя каталога = md5(distributionUrl) из
       # gradle-wrapper.properties p4a, .ok-маркер отключает скачивание враппером.
+      # www.openssl.org сегодня стабильно отдаёт 504 с раннеров GitHub.
+      # p4a кладёт архивы в packages/<рецепт>/ и пропускает скачивание,
+      # если файл уже есть ("download already cached, skipping").
+      - name: Pre-seed OpenSSL tarball for p4a
+        run: |
+          PKG=".buildozer/android/platform/build-arm64-v8a/packages/openssl"
+          mkdir -p "$PKG"
+          if [ -f "$PKG/openssl-1.1.1w.tar.gz" ]; then
+            echo "OpenSSL уже в кэше пакетов p4a"
+          else
+            ok=0
+            for M in \
+              "https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz" \
+              "https://mirrors.huaweicloud.com/openssl/openssl-1.1.1w.tar.gz" \
+              "https://ftp.openssl.org/source/openssl-1.1.1w.tar.gz"; do
+              echo "качаем OpenSSL с $M"
+              if curl -fL --retry 5 --connect-timeout 15 -o "$PKG/openssl-1.1.1w.tar.gz" "$M"; then
+                ok=1
+                break
+              fi
+              rm -f "$PKG/openssl-1.1.1w.tar.gz"
+            done
+            [ "$ok" = "1" ]
+          fi
+          ls -lh "$PKG"
+
       - name: Pre-seed Gradle 8.0.2 distribution
         run: |
           HASH=245f464cf59c80654b3ee7475b10d1de
@@ -134,7 +160,7 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           buildozer --version
           ok=0
-          for i in 1 2 3; do
+          for i in 1 2 3 4 5; do
             echo "::group::Попытка $i"
             if buildozer -v android debug 2>&1 | tee build.log; then
               echo "::endgroup::"
@@ -143,7 +169,7 @@ jobs:
             fi
             echo "::endgroup::"
             echo "::warning::Попытка $i упала, повторяем"
-            sleep 15
+            sleep 60
           done
           [ "$ok" = "1" ]
           ls -lh bin/*.apk
