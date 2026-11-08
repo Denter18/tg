@@ -88,6 +88,7 @@ jobs:
       # buildozer/p4a переживают повторный запуск на частичной сборке.
       - name: Build APK with Buildozer
         run: |
+          export PATH="$HOME/bzen/bin:$PATH"
           for i in 1 2 3; do
             echo "::group::Попытка $i"
             if ~/bzen/bin/buildozer -v android debug 2>&1 | tee build.log; then
