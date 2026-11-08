@@ -98,31 +98,56 @@ jobs:
       # периодически отдаёт 504. Качаем дистрибутив Gradle 8.0.2 с зеркала
       # прямо в кэш gradle-wrapper: имя каталога = md5(distributionUrl) из
       # gradle-wrapper.properties p4a, .ok-маркер отключает скачивание враппером.
-      # www.openssl.org сегодня стабильно отдаёт 504 с раннеров GitHub.
-      # p4a кладёт архивы в packages/<рецепт>/ и пропускает скачивание,
-      # если файл уже есть ("download already cached, skipping").
-      - name: Pre-seed OpenSSL tarball for p4a
+      # p4a качает рецепты с GitHub releases / openssl.org, которые сегодня
+      # периодически отдают 504. p4a пропускает скачивание, только если в
+      # packages/<рецепт>/ лежат И архив, И .mark-<имя>. Кладём те же файлы
+      # с официальных зеркал (libsdl.org, codeload.github.com) вместе с
+      # маркером; размер проверяем - зеркало может отдать HTML-заглушку.
+      - name: Pre-seed p4a packages
         run: |
-          PKG=".buildozer/android/platform/build-arm64-v8a/packages/openssl"
-          mkdir -p "$PKG"
-          if [ -f "$PKG/openssl-1.1.1w.tar.gz" ]; then
-            echo "OpenSSL уже в кэше пакетов p4a"
-          else
-            ok=0
-            for M in \
-              "https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz" \
-              "https://mirrors.huaweicloud.com/openssl/openssl-1.1.1w.tar.gz" \
-              "https://ftp.openssl.org/source/openssl-1.1.1w.tar.gz"; do
-              echo "качаем OpenSSL с $M"
-              if curl -fL --retry 5 --connect-timeout 15 -o "$PKG/openssl-1.1.1w.tar.gz" "$M"; then
-                ok=1
-                break
+          BASE=".buildozer/android/platform/build-arm64-v8a/packages"
+          seed() {
+            local dir="$1" file="$2" min_size="$3"; shift 3
+            mkdir -p "$BASE/$dir"
+            if [ -f "$BASE/$dir/$file" ] && [ -f "$BASE/$dir/.mark-$file" ] \
+               && [ "$(stat -c%s "$BASE/$dir/$file")" -ge "$min_size" ]; then
+              echo "$dir/$file уже в кэше"
+              return 0
+            fi
+            rm -f "$BASE/$dir/$file" "$BASE/$dir/.mark-$file"
+            for M in "$@"; do
+              echo "качаем $file с $M"
+              if curl -fsSL --retry 3 --connect-timeout 15 -o "$BASE/$dir/$file" "$M" \
+                 && [ "$(stat -c%s "$BASE/$dir/$file")" -ge "$min_size" ]; then
+                touch "$BASE/$dir/.mark-$file"
+                echo "$dir/$file готов ($(stat -c%s "$BASE/$dir/$file") байт)"
+                return 0
               fi
-              rm -f "$PKG/openssl-1.1.1w.tar.gz"
+              rm -f "$BASE/$dir/$file"
             done
-            [ "$ok" = "1" ]
-          fi
-          ls -lh "$PKG"
+            echo "::error::не удалось скачать $file ни с одного зеркала"
+            return 1
+          }
+          seed openssl openssl-1.1.1w.tar.gz 1000000 \
+            "https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz" \
+            "https://ftp.openssl.org/source/openssl-1.1.1w.tar.gz" \
+            "https://www.openssl.org/source/openssl-1.1.1w.tar.gz"
+          seed sdl2 SDL2-2.28.5.tar.gz 7000000 \
+            "https://www.libsdl.org/release/SDL2-2.28.5.tar.gz" \
+            "https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-2.28.5.tar.gz"
+          seed sdl2_mixer SDL2_mixer-2.6.3.tar.gz 9000000 \
+            "https://www.libsdl.org/projects/SDL_mixer/release/SDL2_mixer-2.6.3.tar.gz" \
+            "https://github.com/libsdl-org/SDL_mixer/releases/download/release-2.6.3/SDL2_mixer-2.6.3.tar.gz"
+          seed sdl2_ttf SDL2_ttf-2.20.2.tar.gz 12000000 \
+            "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.20.2.tar.gz" \
+            "https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.20.2/SDL2_ttf-2.20.2.tar.gz"
+          seed pyjnius 1.6.1.zip 100000 \
+            "https://codeload.github.com/kivy/pyjnius/zip/refs/tags/1.6.1" \
+            "https://github.com/kivy/pyjnius/archive/1.6.1.zip"
+          seed kivy 2.3.0.zip 1000000 \
+            "https://codeload.github.com/kivy/kivy/zip/refs/tags/2.3.0" \
+            "https://github.com/kivy/kivy/archive/2.3.0.zip"
+          find "$BASE" -maxdepth 2 -type f | sort
 
       - name: Pre-seed Gradle 8.0.2 distribution
         run: |
