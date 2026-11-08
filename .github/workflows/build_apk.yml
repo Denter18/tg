@@ -82,10 +82,22 @@ jobs:
           sed -i "/^\[app\]/a android.sdk_path = $SDK_DIR" buildozer.spec
           grep -n "android.sdk_path" buildozer.spec
 
+      # p4a качает зависимости (SDL, openssl и т.д.) с внешних серверов;
+      # их CDN периодически отдаёт 504. Повторяем прогон до 3 раз —
+      # buildozer/p4a переживают повторный запуск на частичной сборке.
       - name: Build APK with Buildozer
         run: |
-          set -o pipefail
-          buildozer -v android debug 2>&1 | tee build.log
+          for i in 1 2 3; do
+            echo "::group::Попытка $i"
+            if buildozer -v android debug 2>&1 | tee build.log; then
+              echo "::endgroup::"
+              break
+            fi
+            echo "::endgroup::"
+            echo "::warning::Попытка $i упала, повторяем"
+            sleep 10
+          done
+          ls -lh bin/*.apk
 
       # Если сборка упала, выводим нужную часть лога в аннотации запуска -
       # их можно прочитать без скачивания логов.
