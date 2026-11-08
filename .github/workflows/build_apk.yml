@@ -45,11 +45,13 @@ jobs:
             zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
             libffi-dev libssl-dev automake autopoint gettext libltdl-dev
 
+      # Без venv: buildozer изнутри вызывает `pip install --user`, что запрещено
+      # внутри виртуального окружения. Системный python 3.10 на ubuntu-22.04
+      # допускает --user, ставим buildozer в пользовательский site-packages.
       - name: Install Buildozer
         run: |
-          python3 -m venv ~/bzen
-          ~/bzen/bin/pip install --upgrade pip "setuptools<69.0.0" wheel virtualenv
-          ~/bzen/bin/pip install "cython==0.29.36" "buildozer==1.5.0"
+          python3 -m pip install --user --upgrade "setuptools<69.0.0" wheel virtualenv
+          python3 -m pip install --user "cython==0.29.36" "buildozer==1.5.0"
 
       # buildozer ищет sdkmanager по старому пути <sdk>/tools/bin/sdkmanager,
       # а на раннере установлен современный cmdline-tools. Делаем симлинк
@@ -88,10 +90,11 @@ jobs:
       # buildozer/p4a переживают повторный запуск на частичной сборке.
       - name: Build APK with Buildozer
         run: |
-          export PATH="$HOME/bzen/bin:$PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          buildozer --version
           for i in 1 2 3; do
             echo "::group::Попытка $i"
-            if ~/bzen/bin/buildozer -v android debug 2>&1 | tee build.log; then
+            if buildozer -v android debug 2>&1 | tee build.log; then
               echo "::endgroup::"
               break
             fi
