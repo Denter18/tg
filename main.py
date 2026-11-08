@@ -121,6 +121,19 @@ class TgBridgeEngine:
         return ctx
 
     async def connect_tcp(self, ip, port, timeout=8.0, use_ssl=None, server_hostname=None):
+        # Если пришло имя (мост, например), резолвим сами через защищённый UDP:
+        # системный резолвер ходит через DNS туннеля, а на сетях без IPv6
+        # getaddrinfo может вернуть AAAA-запись -> TCP уйдёт в никуда.
+        try:
+            socket.inet_aton(ip)
+        except OSError:
+            ips = await self.resolve_ips(ip)
+
+            if not ips:
+                raise OSError(f"DNS: не разрешить имя {ip}")
+
+            ip = ips[0]
+
         sock = self.new_socket("tcp", ip)
 
         try:
@@ -232,6 +245,10 @@ class TgBridgeEngine:
                     fut.set_exception(exc)
 
         sock = self.new_socket("udp", server)
+
+        # Без connect() asyncio не знает адрес назначения и sendto(data)
+        # с пустым addr бросает ошибку молча внутри транспорта.
+        sock.connect((server, 53))
         transport, _ = await loop.create_datagram_endpoint(Proto, sock=sock)
 
         try:
