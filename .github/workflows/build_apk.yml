@@ -19,8 +19,15 @@ jobs:
       - name: Show system Python
         run: python3 --version
 
-      # Ключ зависит от buildozer.spec и хука: при смене версий p4a/Python/NDK
-      # кэш пересоздаётся, а не подмешивает устаревшие сборки.
+      # Ключ считаем ДО правки buildozer.spec (ниже sed добавляет android.sdk_path),
+      # иначе хэш на restore и на save различался бы и кэш не попадал в цель.
+      - name: Compute Buildozer cache key
+        id: ck
+        run: |
+          H=$(sha256sum buildozer.spec p4a_hook.py | sha256sum | cut -c1-16)
+          echo "key=buildozer-tgbridge-v1-Linux-$H" >> "$GITHUB_OUTPUT"
+          echo "cache key: buildozer-tgbridge-v1-Linux-$H"
+
       # Gradle 8 / Android Gradle Plugin требуют Java 17, а на раннере по
       # умолчанию JAVA_HOME указывает на Java 11 (установка openjdk-17 это не меняет).
       - name: Set up Java 17
@@ -35,7 +42,8 @@ jobs:
           path: |
             .buildozer
             ~/.buildozer
-          key: buildozer-tgbridge-v1-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a_hook.py') }}
+          key: ${{ steps.ck.outputs.key }}
+          restore-keys: buildozer-tgbridge-v1-Linux-
 
       - name: Install system dependencies
         run: |
@@ -88,20 +96,26 @@ jobs:
       # p4a качает зависимости (SDL, openssl и т.д.) с внешних серверов;
       # их CDN периодически отдаёт 504. Повторяем прогон до 3 раз —
       # buildozer/p4a переживают повторный запуск на частичной сборке.
+      # ВАЖНО: pipefail, иначе `buildozer | tee` вернёт код tee и break
+      # сработает после первой же (провалившейся) попытки.
       - name: Build APK with Buildozer
         run: |
+          set -o pipefail
           export PATH="$HOME/.local/bin:$PATH"
           buildozer --version
+          ok=0
           for i in 1 2 3; do
             echo "::group::Попытка $i"
             if buildozer -v android debug 2>&1 | tee build.log; then
               echo "::endgroup::"
+              ok=1
               break
             fi
             echo "::endgroup::"
             echo "::warning::Попытка $i упала, повторяем"
-            sleep 10
+            sleep 15
           done
+          [ "$ok" = "1" ]
           ls -lh bin/*.apk
 
       # Если сборка упала, выводим нужную часть лога в аннотации запуска -
@@ -143,4 +157,4 @@ jobs:
           path: |
             .buildozer
             ~/.buildozer
-          key: buildozer-tgbridge-v1-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a_hook.py') }}
+          key: ${{ steps.ck.outputs.key }}
