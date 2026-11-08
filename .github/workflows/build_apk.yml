@@ -42,6 +42,7 @@ jobs:
           path: |
             .buildozer
             ~/.buildozer
+            ~/.gradle/wrapper
           key: ${{ steps.ck.outputs.key }}
           restore-keys: buildozer-tgbridge-v1-Linux-
 
@@ -92,6 +93,35 @@ jobs:
 
           sed -i "/^\[app\]/a android.sdk_path = $SDK_DIR" buildozer.spec
           grep -n "android.sdk_path" buildozer.spec
+
+      # services.gradle.org редиректит на GitHub releases, который сегодня
+      # периодически отдаёт 504. Качаем дистрибутив Gradle 8.0.2 с зеркала
+      # прямо в кэш gradle-wrapper: имя каталога = md5(distributionUrl) из
+      # gradle-wrapper.properties p4a, .ok-маркер отключает скачивание враппером.
+      - name: Pre-seed Gradle 8.0.2 distribution
+        run: |
+          HASH=245f464cf59c80654b3ee7475b10d1de
+          DIR="$HOME/.gradle/wrapper/dists/gradle-8.0.2-all/$HASH"
+          mkdir -p "$DIR"
+          if [ -f "$DIR/gradle-8.0.2-all.zip.ok" ]; then
+            echo "Gradle 8.0.2 уже в кэше враппера"
+          else
+            rm -f "$DIR/gradle-8.0.2-all.zip"
+            ok=0
+            for M in \
+              "https://mirrors.huaweicloud.com/gradle/gradle-8.0.2-all.zip" \
+              "https://mirrors.cloud.tencent.com/gradle/gradle-8.0.2-all.zip"; do
+              echo "качаем Gradle 8.0.2 с $M"
+              if curl -fL --retry 3 --connect-timeout 15 -o "$DIR/gradle-8.0.2-all.zip" "$M"; then
+                ok=1
+                break
+              fi
+            done
+            [ "$ok" = "1" ]
+            unzip -q "$DIR/gradle-8.0.2-all.zip" -d "$DIR"
+            touch "$DIR/gradle-8.0.2-all.zip.ok"
+          fi
+          ls -la "$DIR"
 
       # p4a качает зависимости (SDL, openssl и т.д.) с внешних серверов;
       # их CDN периодически отдаёт 504. Повторяем прогон до 3 раз —
@@ -157,4 +187,5 @@ jobs:
           path: |
             .buildozer
             ~/.buildozer
+            ~/.gradle/wrapper
           key: ${{ steps.ck.outputs.key }}
