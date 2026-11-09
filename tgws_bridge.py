@@ -53,12 +53,30 @@ async def open_bridge_ws(connect_tcp, base_url, dc, media, timeout=8.0):
     Возвращает готовый tgws.WebSocket или бросает исключение.
     """
     host, prefix = normalize_base(base_url)
-    ws = tgws.WebSocket(*await connect_tcp(
-        host, 443,
-        timeout=timeout,
-        use_ssl="tls",  # движок сам создаёт контекст (без проверки имени:
-        # содержимое защищает MTProto, как у нативных шлюзов)
-        server_hostname=host,
-    ))
-    await ws.handshake(host, prefix + bridge_path(dc, media))
+
+    try:
+        conn = await connect_tcp(
+            host, 443,
+            timeout=timeout,
+            use_ssl="tls",  # движок сам создаёт контекст (без проверки имени:
+            # содержимое защищает MTProto, как у нативных шлюзов)
+            server_hostname=host,
+        )
+    except TimeoutError as e:
+        raise TimeoutError(f"TCP к {host}:443") from e
+    except Exception as e:
+        raise type(e)(f"TCP/TLS к {host}: {str(e)[:48]}") from e
+
+    ws = tgws.WebSocket(*conn)
+
+    try:
+        await ws.handshake(host, prefix + bridge_path(dc, media))
+    except Exception as e:
+        try:
+            ws.writer.close()
+        except Exception:
+            pass
+
+        raise OSError(f"WS-рукопожатие: {str(e)[:48] or type(e).__name__}") from e
+
     return ws

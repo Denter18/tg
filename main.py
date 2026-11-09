@@ -20,6 +20,7 @@ WebSocket-релей (Cloudflare Worker), когда провайдер блок
 """
 
 import asyncio
+import json
 import random
 import socket
 import ssl
@@ -53,6 +54,14 @@ POOL_TTL = 20.0
 # Публичные DNS, куда пересылаем запросы приложений из туннеля.
 UDP_DNS_SERVERS = ["8.8.8.8", "1.1.1.1", "77.88.8.8", "9.9.9.9"]
 UDP_TIMEOUT = 2.5
+
+# DNS-over-HTTPS: провайдер может подменять ответы UDP-DNS (sinkhole для
+# заблокированных доменов), а вот TLS к dns.google/cloudflare обычно живой.
+# Подключение идёт на IP напрямую, SNI — к имени резолвера.
+DOH_RESOLVERS = [
+    ("8.8.8.8", "dns.google"),
+    ("1.1.1.1", "cloudflare-dns.com"),
+]
 
 
 class TgBridgeEngine:
@@ -132,6 +141,8 @@ class TgBridgeEngine:
             if not ips:
                 raise OSError(f"DNS: не разрешить имя {ip}")
 
+            # В логе сразу видно, не подсунул ли провайдер sinkhole-IP.
+            self._note_once(("dns", ip), f"[DNS] {ip} -> {', '.join(ips)}")
             ip = ips[0]
 
         sock = self.new_socket("tcp", ip)
@@ -258,10 +269,71 @@ class TgBridgeEngine:
         finally:
             transport.close()
 
+    async def _doh_query(self, server_ip: str, server_name: str, host: str):
+        """Один запрос DNS-over-HTTPS (dns-json) через protect()-сокет."""
+        sock = self.new_socket("tcp", server_ip)
+
+        try:
+            await asyncio.wait_for(
+                asyncio.get_running_loop().sock_connect(sock, (server_ip, 443)),
+                6.0,
+            )
+
+            try:
+                import certifi
+
+                ctx = ssl.create_default_context(cafile=certifi.where())
+            except ImportError:
+                ctx = ssl.create_default_context()
+
+            reader, writer = await asyncio.open_connection(
+                sock=sock,
+                ssl=ctx,
+                server_hostname=server_name,
+                ssl_shutdown_timeout=1.0,
+            )
+        except BaseException:
+            sock.close()
+            raise
+
+        try:
+            request = (
+                f"GET /dns-query?name={host}&type=A HTTP/1.1\r\n"
+                f"Host: {server_name}\r\n"
+                "Accept: application/dns-json\r\n"
+                "Connection: close\r\n\r\n"
+            )
+            writer.write(request.encode("ascii"))
+            await writer.drain()
+            raw = await asyncio.wait_for(reader.read(65536), 6.0)
+        finally:
+            writer.close()
+
+        _head, _sep, body = raw.partition(b"\r\n\r\n")
+        answers = json.loads(body.decode("utf-8")).get("Answer", [])
+        return [a["data"] for a in answers if a.get("type") == 1]
+
     async def resolve_ips(self, host: str):
-        """A-записи через публичные резолверы или None."""
+        """A-записи: сначала DoH (провайдеру не подсунуть ложный ответ),
+        при неудаче — классический UDP к публичным резолверам."""
+        host = host.lower()
+
+        async def doh(server_ip, server_name):
+            try:
+                return await self._doh_query(server_ip, server_name, host)
+            except Exception:
+                return []
+
+        doh_results = await asyncio.gather(
+            *(doh(ip, name) for ip, name in DOH_RESOLVERS)
+        )
+
+        for ips in doh_results:
+            if ips:
+                return ips
+
         tid = random.randrange(65536)
-        packet = self._dns_build(host.lower(), tid)
+        packet = self._dns_build(host, tid)
 
         async def one(server):
             try:
